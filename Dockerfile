@@ -7,7 +7,7 @@ FROM --platform=${BUILDPLATFORM} golang:1.25@latest AS builder
 COPY . /src
 WORKDIR /src
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build --installsuffix cgo -ldflags="-s -w -extldflags '-static'" -a -o /kvs-tls-reload kvs-tls-reload.go
+RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build --installsuffix cgo -ldflags="-s -w -extldflags '-static'" -a -o /kvs-tls-reload main.go
 
 FROM ${BASEIMAGE}
 

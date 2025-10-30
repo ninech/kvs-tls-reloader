@@ -48,11 +48,11 @@ var (
 		Name:      "success_reloads_total",
 		Help:      "Total successful reload calls",
 	})
-	reloadErrorsByReason = prometheus.NewCounterVec(prometheus.CounterOpts{
+	reloadErrors = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "reload_errors_total",
 		Help:      "Total reload errors by reason",
-	}, []string{"reason"})
+	})
 	watcherErrors = prometheus.NewCounter(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "watcher_errors_total",
@@ -68,7 +68,7 @@ var (
 func init() {
 	prometheus.MustRegister(lastReloadError)
 	prometheus.MustRegister(successReloads)
-	prometheus.MustRegister(reloadErrorsByReason)
+	prometheus.MustRegister(reloadErrors)
 	prometheus.MustRegister(watcherErrors)
 	prometheus.MustRegister(totalReloadRequests)
 }
@@ -147,7 +147,7 @@ func newKvsClient(flags *cli) *redis.Client {
 func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client) error {
 	err := client.ConfigSet(ctx, "tls-ca-cert-file", filepath.Join(flags.CertDir, flags.CaFilename)).Err()
 	if err != nil {
-		return fmt.Errorf("error reloading tls key file: %w", err)
+		return fmt.Errorf("error reloading tls ca file: %w", err)
 	}
 
 	err = client.ConfigSet(ctx, "tls-key-file", filepath.Join(flags.CertDir, flags.KeyFilename)).Err()
@@ -165,7 +165,7 @@ func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client) error
 
 func setFailureMetrics(reason string) {
 	totalReloadRequests.Inc()
-	reloadErrorsByReason.WithLabelValues(reason).Inc()
+	reloadErrors.Inc()
 	lastReloadError.Set(1.0)
 }
 
