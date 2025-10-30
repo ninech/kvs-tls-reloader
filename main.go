@@ -3,33 +3,39 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"flag"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 
+	"github.com/alecthomas/kong"
 	fsnotify "github.com/fsnotify/fsnotify"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
-const namespace = "kvs_tls_reload"
+const (
+	scriptname = "kvs-tls-reload"
+	namespace  = "kvs_tls_reload"
+)
+
+type cli struct {
+	VolumeDir     string `required:"" help:"The secret volume directory to watch for updates." env:"VOLUME_DIR"`
+	ListenAddress string `name:"web.listen-address" default:":9533" help:"Address to listen on for web interface and telemetry."`
+	MetricPath    string `name:"web.telemetry-path" default:"/metrics" help:"Path under which to expose metrics."`
+	KvsHost       string `default:"127.0.0.1" help:"Host where the KeyValueStore is running."`
+	KvsPort       int    `default:"6379" help:"The port the KeyValueStore is listening on."`
+	KvsTLSEnabled bool   `default:"true" help:"Connect to the KeyValueStore using TLS."`
+	KvsUser       string `default:"default" help:"User for the KeyValueStore." env:"KVS_USER"`
+	KvsPassword   string `default:"" help:"Password for the KeyValueStore." env:"KVS_PASSWORD"`
+	CertFilename  string `default:"tls.crt" help:"Filename of the tls cert."`
+	KeyFilename   string `default:"tls.key" help:"Filename of the tls key."`
+	CaFilename    string `default:"ca.crt" help:"Filename of the ca cert."`
+}
 
 var (
-	volumeDir     = flag.String("volume-dir", "", "The secret volume directory to watch for updates.")
-	listenAddress = flag.String("web.listen-address", ":9533", "Address to listen on for web interface and telemetry.")
-	metricPath    = flag.String("web.telemetry-path", "/metrics", "Path under which to expose metrics.")
-	kvsHost       = flag.String("kvs-host", "127.0.0.1", "Host where the KeyValueStore is running.")
-	kvsPort       = flag.Int("kvs-port", 6379, "The port the KeyValueStore is listening on.")
-	kvsTLSEnabled = flag.Bool("kvs-tls", true, "Connect to the KeyValueStore using TLS.")
-	kvsUser       = flag.String("kvs-user", "default", "User for the KeyValueStore.")
-	kvsPassword   = flag.String("kvs-password", "", "Password for the KeyValueStore.")
-
 	lastReloadError = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Name:      "last_reload_error",
@@ -66,15 +72,14 @@ func init() {
 }
 
 func main() {
-	flag.Parse()
 	ctx := context.Background()
-
-	if *volumeDir == "" {
-		log.Println("Missing volume-dir")
-		log.Println()
-		flag.Usage()
-		os.Exit(1)
-	}
+	flags := &cli{}
+	_ = kong.Must(
+		flags,
+		kong.Name(scriptname),
+		kong.Description("Reloads a KeyValueStore's TLS cert and key when they get replaced in the filesystem."),
+		kong.UsageOnError(),
+	)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -91,11 +96,11 @@ func main() {
 				}
 				log.Println("secret updated")
 
-				kvsClient := newKvsClient()
+				kvsClient := newKvsClient(flags)
 
-				log.Printf("performing KVS TLS reload on volume path %s", *volumeDir)
+				log.Printf("performing KVS TLS reload on volume path %s", flags.VolumeDir)
 
-				err := reloadKvsCerts(ctx, kvsClient)
+				err := reloadKvsCerts(ctx, flags, kvsClient)
 				if err != nil {
 					setFailureMetrics(err.Error())
 					log.Println("error triggering reload")
@@ -111,41 +116,41 @@ func main() {
 		}
 	}()
 
-	log.Printf("Watching directory: %q", *volumeDir)
-	err = watcher.Add(*volumeDir)
+	log.Printf("Watching directory: %q", flags.VolumeDir)
+	err = watcher.Add(flags.VolumeDir)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Fatal(serverMetrics(*listenAddress, *metricPath))
+	log.Fatal(serverMetrics(flags.ListenAddress, flags.MetricPath))
 }
 
-func newKvsClient() *redis.Client {
+func newKvsClient(flags *cli) *redis.Client {
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}
-	if !*kvsTLSEnabled {
+	if !flags.KvsTLSEnabled {
 		tlsConfig = nil
 	}
 
 	return redis.NewClient(&redis.Options{
-		Addr:      net.JoinHostPort(*kvsHost, strconv.Itoa(*kvsPort)),
-		Username:  *kvsUser,
-		Password:  *kvsPassword,
+		Addr:      net.JoinHostPort(flags.KvsHost, strconv.Itoa(flags.KvsPort)),
+		Username:  flags.KvsUser,
+		Password:  flags.KvsPassword,
 		TLSConfig: tlsConfig,
 	})
 }
 
-func reloadKvsCerts(ctx context.Context, client *redis.Client) error {
-	err := client.ConfigSet(ctx, "tls-ca-cert-file", *volumeDir+"ca.crt").Err()
+func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client) error {
+	err := client.ConfigSet(ctx, "tls-ca-cert-file", flags.VolumeDir+flags.CaFilename).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls key file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-key-file", *volumeDir+"tls.key").Err()
+	err = client.ConfigSet(ctx, "tls-key-file", flags.VolumeDir+flags.KeyFilename).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls key file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-cert-file", *volumeDir+"tls.crt").Err()
+	err = client.ConfigSet(ctx, "tls-cert-file", flags.VolumeDir+flags.CertFilename).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls cert file: %w", err)
 	}
@@ -166,16 +171,16 @@ func setSuccessMetrics() {
 }
 
 func isValidEvent(event fsnotify.Event) bool {
-	if event.Op&fsnotify.Create != fsnotify.Create {
+	if !event.Has(fsnotify.Op(fsnotify.Write)) {
 		return false
 	}
-	if filepath.Base(event.Name) != "..data" {
+	if event.Name != "..data" {
 		return false
 	}
 	return true
 }
 
-func serverMetrics(listenAddress, metricsPath string) error {
+func serverMetrics(ListenAddress, metricsPath string) error {
 	http.Handle(metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`
@@ -188,5 +193,5 @@ func serverMetrics(listenAddress, metricsPath string) error {
 			</html>
 		`))
 	})
-	return http.ListenAndServe(listenAddress, nil)
+	return http.ListenAndServe(ListenAddress, nil)
 }
