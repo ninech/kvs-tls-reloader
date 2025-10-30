@@ -104,7 +104,7 @@ func main() {
 
 				err := reloadKvsCerts(ctx, flags, kvsClient)
 				if err != nil {
-					setFailureMetrics(err.Error())
+					setFailureMetrics()
 					log.Println("error triggering reload: ", err)
 				} else {
 					setSuccessMetrics()
@@ -163,7 +163,7 @@ func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client) error
 	return nil
 }
 
-func setFailureMetrics(reason string) {
+func setFailureMetrics() {
 	totalReloadRequests.Inc()
 	reloadErrors.Inc()
 	lastReloadError.Set(1.0)
