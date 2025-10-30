@@ -22,17 +22,17 @@ const (
 )
 
 type cli struct {
-	VolumeDir     string `required:"" help:"The secret volume directory to watch for updates." env:"VOLUME_DIR"`
+	CertDir       string `required:"" help:"The certificate directory to watch for updates." env:"KVS_CERT_DIR"`
 	ListenAddress string `name:"web.listen-address" default:":9533" help:"Address to listen on for web interface and telemetry."`
 	MetricPath    string `name:"web.telemetry-path" default:"/metrics" help:"Path under which to expose metrics."`
-	KvsHost       string `default:"127.0.0.1" help:"Host where the KeyValueStore is running."`
-	KvsPort       int    `default:"6379" help:"The port the KeyValueStore is listening on."`
-	KvsTLSEnabled bool   `default:"true" help:"Connect to the KeyValueStore using TLS."`
+	KvsHost       string `default:"127.0.0.1" help:"Host where the KeyValueStore is running." env:"KVS_HOST"`
+	KvsPort       int    `default:"6379" help:"The port the KeyValueStore is listening on." env:"KVS_PORT"`
+	KvsTLSEnabled bool   `default:"true" help:"Connect to the KeyValueStore using TLS." env:"KVS_TLS_ENABLED"`
 	KvsUser       string `default:"default" help:"User for the KeyValueStore." env:"KVS_USER"`
 	KvsPassword   string `default:"" help:"Password for the KeyValueStore." env:"KVS_PASSWORD"`
-	CertFilename  string `default:"tls.crt" help:"Filename of the tls cert."`
-	KeyFilename   string `default:"tls.key" help:"Filename of the tls key."`
-	CaFilename    string `default:"ca.crt" help:"Filename of the ca cert."`
+	CertFilename  string `default:"tls.crt" help:"Filename of the tls cert." env:"KVS_CERT_FILENAME"`
+	KeyFilename   string `default:"tls.key" help:"Filename of the tls key." env:"KVS_KEY_FILENAME"`
+	CaFilename    string `default:"ca.crt" help:"Filename of the ca cert." env:"KVS_CA_FILENAME"`
 }
 
 var (
@@ -98,7 +98,7 @@ func main() {
 
 				kvsClient := newKvsClient(flags)
 
-				log.Printf("performing KVS TLS reload on volume path %s", flags.VolumeDir)
+				log.Printf("performing KVS TLS reload on host %s", flags.KvsHost)
 
 				err := reloadKvsCerts(ctx, flags, kvsClient)
 				if err != nil {
@@ -116,8 +116,8 @@ func main() {
 		}
 	}()
 
-	log.Printf("Watching directory: %q", flags.VolumeDir)
-	err = watcher.Add(flags.VolumeDir)
+	log.Printf("Watching directory: %q", flags.CertDir)
+	err = watcher.Add(flags.CertDir)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -140,17 +140,17 @@ func newKvsClient(flags *cli) *redis.Client {
 }
 
 func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client) error {
-	err := client.ConfigSet(ctx, "tls-ca-cert-file", flags.VolumeDir+flags.CaFilename).Err()
+	err := client.ConfigSet(ctx, "tls-ca-cert-file", flags.CertDir+flags.CaFilename).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls key file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-key-file", flags.VolumeDir+flags.KeyFilename).Err()
+	err = client.ConfigSet(ctx, "tls-key-file", flags.CertDir+flags.KeyFilename).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls key file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-cert-file", flags.VolumeDir+flags.CertFilename).Err()
+	err = client.ConfigSet(ctx, "tls-cert-file", flags.CertDir+flags.CertFilename).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls cert file: %w", err)
 	}
@@ -171,10 +171,7 @@ func setSuccessMetrics() {
 }
 
 func isValidEvent(event fsnotify.Event) bool {
-	if !event.Has(fsnotify.Op(fsnotify.Write)) {
-		return false
-	}
-	return true
+	return event.Has(fsnotify.Op(fsnotify.Write))
 }
 
 func serverMetrics(ListenAddress, metricsPath string) error {
