@@ -74,7 +74,7 @@ func init() {
 func main() {
 	ctx := context.Background()
 	flags := &cli{}
-	_ = kong.Must(
+	_ = kong.Parse(
 		flags,
 		kong.Name(scriptname),
 		kong.Description("Reloads a KeyValueStore's TLS cert and key when they get replaced in the filesystem."),
