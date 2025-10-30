@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 )
 
 const (
@@ -136,6 +137,9 @@ func newKvsClient(flags *cli) *redis.Client {
 		Username:  flags.KvsUser,
 		Password:  flags.KvsPassword,
 		TLSConfig: tlsConfig,
+		MaintNotificationsConfig: &maintnotifications.Config{
+			Mode: maintnotifications.ModeDisabled,
+		},
 	})
 }
 
