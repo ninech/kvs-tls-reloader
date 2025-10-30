@@ -174,9 +174,6 @@ func isValidEvent(event fsnotify.Event) bool {
 	if !event.Has(fsnotify.Op(fsnotify.Write)) {
 		return false
 	}
-	if event.Name != "..data" {
-		return false
-	}
 	return true
 }
 
