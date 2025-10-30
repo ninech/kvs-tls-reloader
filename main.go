@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"github.com/alecthomas/kong"
@@ -144,17 +145,17 @@ func newKvsClient(flags *cli) *redis.Client {
 }
 
 func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client) error {
-	err := client.ConfigSet(ctx, "tls-ca-cert-file", flags.CertDir+flags.CaFilename).Err()
+	err := client.ConfigSet(ctx, "tls-ca-cert-file", filepath.Join(flags.CertDir, flags.CaFilename)).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls key file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-key-file", flags.CertDir+flags.KeyFilename).Err()
+	err = client.ConfigSet(ctx, "tls-key-file", filepath.Join(flags.CertDir, flags.KeyFilename)).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls key file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-cert-file", flags.CertDir+flags.CertFilename).Err()
+	err = client.ConfigSet(ctx, "tls-cert-file", filepath.Join(flags.CertDir, flags.CertFilename)).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls cert file: %w", err)
 	}
