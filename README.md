@@ -7,8 +7,7 @@ It watches mounted secret volume dirs for updated certificate files. After an up
 the KeyValueStore and reloads the certificates (by CONFIG SET command) without restarting the service
 or pod. Therefore, the supplied user account needs to have permission to issue these commands.
 
-The script is supposed to run in a sidecar container to be able to access the pod's filesystem and
-network.
+The script is supposed to run in a sidecar container to be able to access the pod's network.
 
 The Docker image is available from ghcr.io at <https://github.com/ninech/kvs-tls-reloader/pkgs/container/kvs-tls-reloader>.
 
