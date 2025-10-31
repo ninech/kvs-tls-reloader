@@ -21,6 +21,9 @@ import (
 const (
 	scriptname = "kvs-tls-reload"
 	namespace  = "kvs_tls_reload"
+	caKey      = "tls-ca-cert-file"
+	certKey    = "tls-cert-file"
+	keyKey     = "tls-key-file"
 )
 
 type cli struct {
@@ -29,7 +32,6 @@ type cli struct {
 	MetricPath    string `name:"web.telemetry-path" default:"/metrics" help:"Path under which to expose metrics."`
 	KvsHost       string `default:"127.0.0.1" help:"Host where the KeyValueStore is running." env:"KVS_HOST"`
 	KvsPort       int    `default:"6379" help:"The port the KeyValueStore is listening on." env:"KVS_PORT"`
-	KvsTLSEnabled bool   `default:"true" help:"Connect to the KeyValueStore using TLS." env:"KVS_TLS_ENABLED"`
 	KvsUser       string `default:"default" help:"User for the KeyValueStore." env:"KVS_USER"`
 	KvsPassword   string `default:"" help:"Password for the KeyValueStore." env:"KVS_PASSWORD"`
 	CertFilename  string `default:"tls.crt" help:"Filename of the tls cert." env:"KVS_CERT_FILENAME"`
@@ -101,8 +103,17 @@ func main() {
 				kvsClient := newKvsClient(flags)
 
 				log.Printf("performing KVS TLS reload on host %s", flags.KvsHost)
+				log.Println("getting certificate path from config")
 
-				err := reloadKvsCerts(ctx, flags, kvsClient)
+				path, err := getCertPath(ctx, flags, kvsClient)
+				if err != nil {
+					setFailureMetrics()
+					log.Println("error getting cert path: ", err)
+				}
+
+				log.Printf("certificate path is %s", path)
+
+				err = reloadKvsCerts(ctx, flags, kvsClient, path)
 				if err != nil {
 					setFailureMetrics()
 					log.Println("error triggering reload: ", err)
@@ -128,34 +139,43 @@ func main() {
 }
 
 func newKvsClient(flags *cli) *redis.Client {
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true}
-	if !flags.KvsTLSEnabled {
-		tlsConfig = nil
-	}
-
 	return redis.NewClient(&redis.Options{
 		Addr:      net.JoinHostPort(flags.KvsHost, strconv.Itoa(flags.KvsPort)),
 		Username:  flags.KvsUser,
 		Password:  flags.KvsPassword,
-		TLSConfig: tlsConfig,
+		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true},
 		MaintNotificationsConfig: &maintnotifications.Config{
 			Mode: maintnotifications.ModeDisabled,
 		},
 	})
 }
 
-func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client) error {
-	err := client.ConfigSet(ctx, "tls-ca-cert-file", filepath.Join(flags.CertDir, flags.CaFilename)).Err()
+func getCertPath(ctx context.Context, flags *cli, client *redis.Client) (string, error) {
+	res, err := client.ConfigGet(ctx, certKey).Result()
+	if err != nil {
+		return "", fmt.Errorf("error getting tls ca file: %w", err)
+	}
+
+	certFile, exists := res[certKey]
+	if !exists {
+		return "", fmt.Errorf("no tls cert configured")
+	}
+
+	return filepath.Dir(certFile), nil
+}
+
+func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client, path string) error {
+	err := client.ConfigSet(ctx, caKey, filepath.Join(path, flags.CaFilename)).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls ca file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-key-file", filepath.Join(flags.CertDir, flags.KeyFilename)).Err()
+	err = client.ConfigSet(ctx, keyKey, filepath.Join(path, flags.KeyFilename)).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls key file: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, "tls-cert-file", filepath.Join(flags.CertDir, flags.CertFilename)).Err()
+	err = client.ConfigSet(ctx, certKey, filepath.Join(path, flags.CertFilename)).Err()
 	if err != nil {
 		return fmt.Errorf("error reloading tls cert file: %w", err)
 	}
@@ -184,9 +204,9 @@ func serverMetrics(ListenAddress, metricsPath string) error {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`
 			<html>
-			<head><title>KVS TLS Reload Metrics</title></head>
+			<head><title>KVS TLS Reloader Metrics</title></head>
 			<body>
-			<h1>KVS TLS Reload</h1>
+			<h1>KVS TLS Reloader</h1>
 			<p><a href='` + metricsPath + `'>Metrics</a></p>
 			</body>
 			</html>
