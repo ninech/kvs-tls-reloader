@@ -109,6 +109,7 @@ func main() {
 				if err != nil {
 					setFailureMetrics()
 					log.Println("error getting cert path: ", err)
+					continue
 				}
 
 				log.Printf("certificate path is %s", path)
