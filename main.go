@@ -111,6 +111,8 @@ func main() {
 					log.Println("error getting cert path: ", err)
 				}
 
+				log.Printf("certificate path is %s", path)
+
 				err = reloadKvsCerts(ctx, flags, kvsClient, path)
 				if err != nil {
 					setFailureMetrics()
