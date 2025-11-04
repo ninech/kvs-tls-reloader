@@ -197,7 +197,7 @@ func setSuccessMetrics() {
 }
 
 func isValidEvent(event fsnotify.Event) bool {
-	return event.Has(fsnotify.Op(fsnotify.Write))
+	return event.Has(fsnotify.Write) || event.Has(fsnotify.Create)
 }
 
 func serverMetrics(ListenAddress, metricsPath string) error {
