@@ -105,7 +105,7 @@ func main() {
 				log.Printf("performing KVS TLS reload on host %s", flags.KvsHost)
 				log.Println("getting certificate path from config")
 
-				path, err := getCertPath(ctx, flags, kvsClient)
+				path, err := getCertPath(ctx, kvsClient)
 				if err != nil {
 					setFailureMetrics()
 					log.Println("error getting cert path: ", err)
@@ -151,7 +151,7 @@ func newKvsClient(flags *cli) *redis.Client {
 	})
 }
 
-func getCertPath(ctx context.Context, flags *cli, client *redis.Client) (string, error) {
+func getCertPath(ctx context.Context, client *redis.Client) (string, error) {
 	res, err := client.ConfigGet(ctx, certKey).Result()
 	if err != nil {
 		return "", fmt.Errorf("error getting tls ca file: %w", err)
