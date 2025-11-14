@@ -91,6 +91,9 @@ func main() {
 	}
 	defer watcher.Close()
 
+	kvsClient := newKvsClient(flags)
+	defer kvsClient.Close()
+
 	go func() {
 		for {
 			select {
@@ -99,8 +102,6 @@ func main() {
 					continue
 				}
 				log.Println("secret updated")
-
-				kvsClient := newKvsClient(flags)
 
 				log.Printf("performing KVS TLS reload on host %s", flags.KvsHost)
 				log.Println("getting certificate path from config")
