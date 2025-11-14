@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -217,6 +216,7 @@ func (c *cli) serveMetrics(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("error listening on %s: %w", c.ListenAddress, err)
 	}
+	c.logger.InfoContext(ctx, "listening", "addr", c.ListenAddress)
 
 	h := http.NewServeMux()
 	h.Handle(c.MetricPath, promhttp.Handler())
@@ -242,12 +242,12 @@ func (c *cli) serveMetrics(ctx context.Context) error {
 
 	go func() {
 		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("error serving metrics: %v", err)
+			c.logger.ErrorContext(ctx, "error serving metrics", "error", err)
 		}
 	}()
 	<-ctx.Done()
 
-	log.Println("shutting down server")
+	c.logger.InfoContext(ctx, "shutting down server", "addr", c.ListenAddress)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
