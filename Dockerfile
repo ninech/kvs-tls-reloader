@@ -3,9 +3,12 @@
 ARG BASEIMAGE=gcr.io/distroless/static-debian11:nonroot
 
 FROM --platform=${BUILDPLATFORM} golang:1.25 AS builder
-
-COPY . /src
 WORKDIR /src
+
+COPY go.* ./
+RUN go mod download
+
+COPY . ./
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build --installsuffix cgo -ldflags="-s -w -extldflags '-static'" -a -o /kvs-tls-reload main.go
 
