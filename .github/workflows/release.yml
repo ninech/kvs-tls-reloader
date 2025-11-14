@@ -35,7 +35,7 @@ jobs:
           push: ${{ steps.semrel.outputs.version != '' }}
           platforms: linux/arm64/v8,linux/amd64,linux/arm,linux/ppc64le,linux/s390x
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.semrel.outputs.version != '' && steps.semrel.outputs.version || 'latest' }}
+            ghcr.io/${{ github.repository }}:v${{ steps.semrel.outputs.version != '' && steps.semrel.outputs.version || 'latest' }}
             ghcr.io/${{ github.repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
