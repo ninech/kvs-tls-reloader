@@ -9,8 +9,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/fsnotify/fsnotify"
@@ -78,7 +81,9 @@ func init() {
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	flags := &cli{}
 	_ = kong.Parse(
 		flags,
@@ -143,7 +148,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Fatal(serverMetrics(flags.ListenAddress, flags.MetricPath))
+	log.Fatal(serveMetrics(ctx, flags.ListenAddress, flags.MetricPath))
 }
 
 func newKvsClient(flags *cli) *redis.Client {
@@ -235,9 +240,15 @@ func validateCertificates(flags *cli) error {
 	return errors.Join(errs...)
 }
 
-func serverMetrics(ListenAddress, metricsPath string) error {
-	http.Handle(metricsPath, promhttp.Handler())
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+func serveMetrics(ctx context.Context, listenAddress, metricsPath string) error {
+	ln, err := net.Listen("tcp", listenAddress)
+	if err != nil {
+		return fmt.Errorf("error listening on %s: %w", listenAddress, err)
+	}
+
+	h := http.NewServeMux()
+	h.Handle(metricsPath, promhttp.Handler())
+	h.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`
 			<html>
 			<head><title>KVS TLS Reloader Metrics</title></head>
@@ -248,5 +259,25 @@ func serverMetrics(ListenAddress, metricsPath string) error {
 			</html>
 		`))
 	})
-	return http.ListenAndServe(ListenAddress, nil)
+
+	server := &http.Server{
+		BaseContext:       func(l net.Listener) context.Context { return ctx },
+		ReadHeaderTimeout: 10 * time.Second,
+		Handler:           h,
+		ErrorLog:          log.Default(),
+	}
+	defer server.Close()
+
+	go func() {
+		if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("error serving metrics: %v", err)
+		}
+	}()
+	<-ctx.Done()
+
+	log.Println("shutting down server")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return server.Shutdown(ctx)
 }
