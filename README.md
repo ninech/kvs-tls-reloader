@@ -25,7 +25,6 @@ Flags:
       --web.telemetry-path="/metrics"    Path under which to expose metrics.
       --kvs-host="127.0.0.1"             Host where the KeyValueStore is running ($KVS_HOST).
       --kvs-port=6379                    The port the KeyValueStore is listening on ($KVS_PORT).
-      --kvs-tls-enabled                  Connect to the KeyValueStore using TLS ($KVS_TLS_ENABLED).
       --kvs-user="default"               User for the KeyValueStore ($KVS_USER).
       --kvs-password=""                  Password for the KeyValueStore ($KVS_PASSWORD).
       --cert-filename="tls.crt"          Filename of the tls cert ($KVS_CERT_FILENAME).
@@ -37,4 +36,3 @@ Flags:
 ### License
 
 This project is [Apache Licensed](LICENSE.txt)
-
