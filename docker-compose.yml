@@ -1,0 +1,45 @@
+services:
+  redis:
+    image: redis:8-alpine
+    container_name: kvs-redis
+    command: >
+      redis-server
+      --tls-port 6379
+      --port 0
+      --tls-cert-file /tls/tls.crt
+      --tls-key-file /tls/tls.key
+      --tls-ca-cert-file /tls/ca.crt
+      --tls-auth-clients no
+    volumes:
+      - ./test-data:/tls:ro
+    ports:
+      - "6379"
+    depends_on:
+      - cert-generator
+  kvs-tls-reloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - KVS_CERT_DIR=/certs
+      - KVS_HOST=redis
+      - KVS_PORT=6379
+      - KVS_USER=default
+      - KVS_PASSWORD=
+      - KVS_CERT_FILENAME=tls.crt
+      - KVS_KEY_FILENAME=tls.key
+      - KVS_CA_FILENAME=ca.crt
+    volumes:
+      - ./test-data:/certs:ro
+    ports:
+      - "9533"
+    depends_on:
+      - redis
+      - cert-generator
+  cert-generator:
+    image: alpine:latest
+    container_name: cert-generator
+    volumes:
+      - ./test-data:/certs
+      - ./.docker:/scripts:ro
+    command: sh /scripts/generate-certs.sh
