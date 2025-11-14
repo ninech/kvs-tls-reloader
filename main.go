@@ -155,7 +155,7 @@ func newKvsClient(flags *cli) *redis.Client {
 func getCertPath(ctx context.Context, client *redis.Client) (string, error) {
 	res, err := client.ConfigGet(ctx, certKey).Result()
 	if err != nil {
-		return "", fmt.Errorf("error getting tls ca file: %w", err)
+		return "", fmt.Errorf("error getting tls cert file: %w", err)
 	}
 
 	certFile, exists := res[certKey]
