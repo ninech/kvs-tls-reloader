@@ -11,7 +11,7 @@ The script is supposed to run in a sidecar container to be able to access the po
 
 The Docker image is available from ghcr.io at <https://github.com/ninech/kvs-tls-reloader/pkgs/container/kvs-tls-reloader>.
 
-### Usage
+## Usage
 
 ```
 Usage: kvs-tls-reload --cert-dir=STRING [flags]
@@ -33,6 +33,15 @@ Flags:
 
 ```
 
-### License
+## Testing
+
+Use `docker-compose` to start the test environment:
+
+```bash
+docker-compose up cert-generator
+docker-compose up
+```
+
+## License
 
 This project is [Apache Licensed](LICENSE.txt)
