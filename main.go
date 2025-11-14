@@ -203,7 +203,7 @@ func isValidEvent(event fsnotify.Event) bool {
 func serverMetrics(ListenAddress, metricsPath string) error {
 	http.Handle(metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`
+		_, _ = w.Write([]byte(`
 			<html>
 			<head><title>KVS TLS Reloader Metrics</title></head>
 			<body>
