@@ -6,18 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/fsnotify/fsnotify"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
@@ -32,7 +33,7 @@ const (
 )
 
 type cli struct {
-	CertDir       string `required:"" help:"The certificate directory to watch for updates." env:"KVS_CERT_DIR"`
+	CertDir       string `required:"" help:"The certificate directory to watch for updates." type:"existingdir" env:"KVS_CERT_DIR"`
 	ListenAddress string `name:"web.listen-address" default:":9533" help:"Address to listen on for web interface and telemetry."`
 	MetricPath    string `name:"web.telemetry-path" default:"/metrics" help:"Path under which to expose metrics."`
 	KvsHost       string `default:"127.0.0.1" help:"Host where the KeyValueStore is running." env:"KVS_HOST"`
@@ -42,68 +43,51 @@ type cli struct {
 	CertFilename  string `default:"tls.crt" help:"Filename of the tls cert." env:"KVS_CERT_FILENAME"`
 	KeyFilename   string `default:"tls.key" help:"Filename of the tls key." env:"KVS_KEY_FILENAME"`
 	CaFilename    string `default:"ca.crt" help:"Filename of the ca cert." env:"KVS_CA_FILENAME"`
-}
 
-var (
-	lastReloadError = prometheus.NewGauge(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Name:      "last_reload_error",
-		Help:      "Whether the last reload resulted in an error (1 for error, 0 for success)",
-	})
-	successReloads = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "success_reloads_total",
-		Help:      "Total successful reload calls",
-	})
-	reloadErrors = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "reload_errors_total",
-		Help:      "Total reload errors by reason",
-	})
-	watcherErrors = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "watcher_errors_total",
-		Help:      "Total filesystem watcher errors",
-	})
-	totalReloadRequests = prometheus.NewCounter(prometheus.CounterOpts{
-		Namespace: namespace,
-		Name:      "requests_total",
-		Help:      "Total reload requests",
-	})
-)
-
-func init() {
-	prometheus.MustRegister(lastReloadError)
-	prometheus.MustRegister(successReloads)
-	prometheus.MustRegister(reloadErrors)
-	prometheus.MustRegister(watcherErrors)
-	prometheus.MustRegister(totalReloadRequests)
+	logger *slog.Logger
+	client *redis.Client
 }
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{}))
+	if err := run(logger); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+
+	os.Exit(0)
+}
+
+func run(logger *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	flags := &cli{}
+	c := &cli{
+		logger: logger,
+	}
 	_ = kong.Parse(
-		flags,
+		c,
 		kong.Name(scriptname),
 		kong.Description("Reloads a KeyValueStore's TLS cert and key when they get replaced in the filesystem."),
 		kong.UsageOnError(),
 	)
 
-	if err := validateCertificates(flags); err != nil {
-		log.Fatalf("certificate validation failed: %v", err)
+	if err := c.validateCertificates(); err != nil {
+		return fmt.Errorf("certificate validation failed: %w", err)
 	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("failed to create watcher: %w", err)
 	}
 	defer watcher.Close()
 
-	kvsClient := newKvsClient(flags)
-	defer kvsClient.Close()
+	c.client = c.newKvsClient()
+	defer c.client.Close()
+
+	const debounceDelay = 2 * time.Second
+	var debounceTimer *time.Timer
+	debounceMutex := sync.Mutex{}
 
 	go func() {
 		for {
@@ -112,50 +96,62 @@ func main() {
 				if !isValidEvent(event) {
 					continue
 				}
-				log.Println("secret updated")
+				c.logger.DebugContext(ctx, "secret update detected", "name", event.Name, "host", c.KvsHost)
 
-				log.Printf("performing KVS TLS reload on host %s", flags.KvsHost)
-				log.Println("getting certificate path from config")
-
-				path, err := getCertPath(ctx, kvsClient)
-				if err != nil {
-					setFailureMetrics()
-					log.Println("error getting cert path: ", err)
-					continue
+				debounceMutex.Lock()
+				if debounceTimer != nil {
+					debounceTimer.Stop()
 				}
 
-				log.Printf("certificate path is %s", path)
-
-				err = reloadKvsCerts(ctx, flags, kvsClient, path)
-				if err != nil {
-					setFailureMetrics()
-					log.Println("error triggering reload: ", err)
-				} else {
-					setSuccessMetrics()
-					log.Println("successfully triggered reload")
-				}
+				debounceTimer = time.AfterFunc(debounceDelay, func() {
+					logger.InfoContext(ctx, "secret update detected, reloading tls configuration", "delay", debounceDelay.String())
+					c.handleEvent(ctx, event)
+				})
+				debounceMutex.Unlock()
 
 			case err := <-watcher.Errors:
 				watcherErrors.Inc()
-				log.Println("error:", err)
+				if err != nil {
+					logger.ErrorContext(ctx, "error watching directory", "error", err)
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
 
-	log.Printf("watching directory: %q", flags.CertDir)
-	err = watcher.Add(flags.CertDir)
-	if err != nil {
-		log.Fatal(err)
+	logger.InfoContext(ctx, "watching directory", "path", c.CertDir)
+	if err := watcher.Add(c.CertDir); err != nil {
+		return fmt.Errorf("failed to add directory to watcher: %w", err)
 	}
 
-	log.Fatal(serveMetrics(ctx, flags.ListenAddress, flags.MetricPath))
+	return c.serveMetrics(ctx)
 }
 
-func newKvsClient(flags *cli) *redis.Client {
+func (c *cli) handleEvent(ctx context.Context, event fsnotify.Event) {
+	path, err := getCertPath(ctx, c.client)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "error getting cert path", "error", err)
+
+		setFailureMetrics()
+		return
+	}
+
+	if err := c.reloadTLSConfig(ctx, path); err != nil {
+		c.logger.ErrorContext(ctx, "error triggering reload", "error", err, "path", path)
+
+		setFailureMetrics()
+		return
+	}
+
+	setSuccessMetrics()
+}
+
+func (c *cli) newKvsClient() *redis.Client {
 	return redis.NewClient(&redis.Options{
-		Addr:      net.JoinHostPort(flags.KvsHost, strconv.Itoa(flags.KvsPort)),
-		Username:  flags.KvsUser,
-		Password:  flags.KvsPassword,
+		Addr:      net.JoinHostPort(c.KvsHost, strconv.Itoa(c.KvsPort)),
+		Username:  c.KvsUser,
+		Password:  c.KvsPassword,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: true},
 		MaintNotificationsConfig: &maintnotifications.Config{
 			Mode: maintnotifications.ModeDisabled,
@@ -177,56 +173,32 @@ func getCertPath(ctx context.Context, client *redis.Client) (string, error) {
 	return filepath.Dir(certFile), nil
 }
 
-func reloadKvsCerts(ctx context.Context, flags *cli, client *redis.Client, path string) error {
-	err := client.ConfigSet(ctx, caKey, filepath.Join(path, flags.CaFilename)).Err()
-	if err != nil {
-		return fmt.Errorf("error reloading tls ca file: %w", err)
+func (c *cli) reloadTLSConfig(ctx context.Context, path string) error {
+	ca := filepath.Join(path, c.CaFilename)
+	key := filepath.Join(path, c.KeyFilename)
+	cert := filepath.Join(path, c.CertFilename)
+
+	if err := c.client.Do(ctx, "config", "set",
+		caKey, ca,
+		keyKey, key,
+		certKey, cert,
+	).Err(); err != nil {
+		return fmt.Errorf("error reloading tls configuration: %w", err)
 	}
 
-	err = client.ConfigSet(ctx, keyKey, filepath.Join(path, flags.KeyFilename)).Err()
-	if err != nil {
-		return fmt.Errorf("error reloading tls key file: %w", err)
-	}
-
-	err = client.ConfigSet(ctx, certKey, filepath.Join(path, flags.CertFilename)).Err()
-	if err != nil {
-		return fmt.Errorf("error reloading tls cert file: %w", err)
-	}
+	c.logger.InfoContext(ctx, "successfully triggered reload", "ca", ca, "key", key, "cert", cert)
 
 	return nil
-}
-
-func setFailureMetrics() {
-	totalReloadRequests.Inc()
-	reloadErrors.Inc()
-	lastReloadError.Set(1.0)
-}
-
-func setSuccessMetrics() {
-	totalReloadRequests.Inc()
-	successReloads.Inc()
-	lastReloadError.Set(0.0)
 }
 
 func isValidEvent(event fsnotify.Event) bool {
 	return event.Has(fsnotify.Write) || event.Has(fsnotify.Create)
 }
 
-func validateCertificates(flags *cli) error {
-	dirInfo, err := os.Stat(flags.CertDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("certificate directory does not exist: %s", flags.CertDir)
-		}
-		return fmt.Errorf("error checking certificate directory: %w", err)
-	}
-	if !dirInfo.IsDir() {
-		return fmt.Errorf("certificate path is not a directory: %s", flags.CertDir)
-	}
-
+func (c *cli) validateCertificates() error {
 	errs := []error{}
-	for _, path := range []string{flags.CertFilename, flags.KeyFilename, flags.CaFilename} {
-		filePath := filepath.Join(flags.CertDir, path)
+	for _, path := range []string{c.CertFilename, c.KeyFilename, c.CaFilename} {
+		filePath := filepath.Join(c.CertDir, path)
 
 		if _, err := os.Stat(filePath); err != nil {
 			if os.IsNotExist(err) {
@@ -240,21 +212,21 @@ func validateCertificates(flags *cli) error {
 	return errors.Join(errs...)
 }
 
-func serveMetrics(ctx context.Context, listenAddress, metricsPath string) error {
-	ln, err := net.Listen("tcp", listenAddress)
+func (c *cli) serveMetrics(ctx context.Context) error {
+	ln, err := net.Listen("tcp", c.ListenAddress)
 	if err != nil {
-		return fmt.Errorf("error listening on %s: %w", listenAddress, err)
+		return fmt.Errorf("error listening on %s: %w", c.ListenAddress, err)
 	}
 
 	h := http.NewServeMux()
-	h.Handle(metricsPath, promhttp.Handler())
+	h.Handle(c.MetricPath, promhttp.Handler())
 	h.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`
 			<html>
 			<head><title>KVS TLS Reloader Metrics</title></head>
 			<body>
 			<h1>KVS TLS Reloader</h1>
-			<p><a href='` + metricsPath + `'>Metrics</a></p>
+			<p><a href='` + c.MetricPath + `'>Metrics</a></p>
 			</body>
 			</html>
 		`))
@@ -264,7 +236,7 @@ func serveMetrics(ctx context.Context, listenAddress, metricsPath string) error 
 		BaseContext:       func(l net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: 10 * time.Second,
 		Handler:           h,
-		ErrorLog:          log.Default(),
+		ErrorLog:          slog.NewLogLogger(c.logger.Handler(), slog.LevelError),
 	}
 	defer server.Close()
 

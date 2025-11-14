@@ -10,7 +10,7 @@ RUN go mod download
 
 COPY . ./
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build --installsuffix cgo -ldflags="-s -w -extldflags '-static'" -a -o /usr/local/bin/kvs-tls-reload main.go
+RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} go build --installsuffix cgo -ldflags="-s -w -extldflags '-static'" -a -o /usr/local/bin/kvs-tls-reload .
 
 FROM ${BASEIMAGE}
 
