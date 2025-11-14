@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG BASEIMAGE=gcr.io/distroless/static-debian11:nonroot
+ARG BASEIMAGE=gcr.io/distroless/static-debian12:nonroot
 
 FROM --platform=${BUILDPLATFORM} golang:1.25 AS builder
 WORKDIR /usr/local/src/kvs-tls-reloader
