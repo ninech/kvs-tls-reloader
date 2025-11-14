@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 
@@ -84,6 +86,10 @@ func main() {
 		kong.Description("Reloads a KeyValueStore's TLS cert and key when they get replaced in the filesystem."),
 		kong.UsageOnError(),
 	)
+
+	if err := validateCertificates(flags); err != nil {
+		log.Fatalf("certificate validation failed: %v", err)
+	}
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -199,6 +205,34 @@ func setSuccessMetrics() {
 
 func isValidEvent(event fsnotify.Event) bool {
 	return event.Has(fsnotify.Write) || event.Has(fsnotify.Create)
+}
+
+func validateCertificates(flags *cli) error {
+	dirInfo, err := os.Stat(flags.CertDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("certificate directory does not exist: %s", flags.CertDir)
+		}
+		return fmt.Errorf("error checking certificate directory: %w", err)
+	}
+	if !dirInfo.IsDir() {
+		return fmt.Errorf("certificate path is not a directory: %s", flags.CertDir)
+	}
+
+	errs := []error{}
+	for _, path := range []string{flags.CertFilename, flags.KeyFilename, flags.CaFilename} {
+		filePath := filepath.Join(flags.CertDir, path)
+
+		if _, err := os.Stat(filePath); err != nil {
+			if os.IsNotExist(err) {
+				errs = append(errs, fmt.Errorf("%s file does not exist: %s", path, filePath))
+			} else {
+				errs = append(errs, fmt.Errorf("error checking %s file: %w", path, err))
+			}
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func serverMetrics(ListenAddress, metricsPath string) error {
